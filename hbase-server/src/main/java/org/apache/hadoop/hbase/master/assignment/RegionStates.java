@@ -68,20 +68,11 @@ public class RegionStates {
   public final static RegionStateStampComparator REGION_STATE_STAMP_COMPARATOR =
     new RegionStateStampComparator();
 
-  private final Object regionsMapLock = new Object();
-
   // TODO: Replace the ConcurrentSkipListMaps
   /**
    * A Map from {@link RegionInfo#getRegionName()} to {@link RegionStateNode}
    */
-  private final ConcurrentSkipListMap<byte[], RegionStateNode> regionsMap =
-    new ConcurrentSkipListMap<>(Bytes.BYTES_COMPARATOR);
-
-  /**
-   * this map is a hack to lookup of region in master by encoded region name is O(n). must put and
-   * remove with regionsMap.
-   */
-  private final ConcurrentSkipListMap<String, RegionStateNode> encodedRegionsMap =
+  private final ConcurrentSkipListMap<String, RegionStateNode> regionsMap =
     new ConcurrentSkipListMap<>();
 
   private final ConcurrentSkipListMap<RegionInfo, RegionStateNode> regionInTransition =
@@ -108,31 +99,23 @@ public class RegionStates {
    */
   public void clear() {
     regionsMap.clear();
-    encodedRegionsMap.clear();
     regionInTransition.clear();
     regionOffline.clear();
     serverMap.clear();
   }
 
   public boolean isRegionInRegionStates(final RegionInfo hri) {
-    return (regionsMap.containsKey(hri.getRegionName()) || regionInTransition.containsKey(hri)
-      || regionOffline.containsKey(hri));
+    return regionsMap.containsKey(hri.getEncodedName())
+      || regionInTransition.containsKey(hri)
+      || regionOffline.containsKey(hri);
   }
 
   // ==========================================================================
   // RegionStateNode helpers
   // ==========================================================================
   RegionStateNode createRegionStateNode(RegionInfo regionInfo) {
-    synchronized (regionsMapLock) {
-      RegionStateNode node = regionsMap.computeIfAbsent(regionInfo.getRegionName(),
-        key -> new RegionStateNode(regionInfo, regionInTransition));
-
-      if (encodedRegionsMap.get(regionInfo.getEncodedName()) != node) {
-        encodedRegionsMap.put(regionInfo.getEncodedName(), node);
-      }
-
-      return node;
-    }
+    return regionsMap.computeIfAbsent(regionInfo.getEncodedName(),
+      key -> new RegionStateNode(regionInfo, regionInTransition));
   }
 
   public RegionStateNode getOrCreateRegionStateNode(RegionInfo regionInfo) {
@@ -141,11 +124,11 @@ public class RegionStates {
   }
 
   public RegionStateNode getRegionStateNodeFromName(byte[] regionName) {
-    return regionsMap.get(regionName);
+    return regionsMap.get(RegionInfo.encodeRegionName(regionName));
   }
 
   public RegionStateNode getRegionStateNodeFromEncodedRegionName(final String encodedRegionName) {
-    return encodedRegionsMap.get(encodedRegionName);
+    return regionsMap.get(encodedRegionName);
   }
 
   public RegionStateNode getRegionStateNode(RegionInfo regionInfo) {
@@ -153,10 +136,7 @@ public class RegionStates {
   }
 
   public void deleteRegion(final RegionInfo regionInfo) {
-    synchronized (regionsMapLock) {
-      regionsMap.remove(regionInfo.getRegionName());
-      encodedRegionsMap.remove(regionInfo.getEncodedName());
-    }
+    regionsMap.remove(regionInfo.getEncodedName());
     // See HBASE-20860
     // After master restarts, merged regions' RIT state may not be cleaned,
     // making sure they are cleaned here
@@ -176,7 +156,7 @@ public class RegionStates {
 
   List<RegionStateNode> getTableRegionStateNodes(final TableName tableName) {
     final ArrayList<RegionStateNode> regions = new ArrayList<RegionStateNode>();
-    for (RegionStateNode node : regionsMap.tailMap(tableName.getName()).values()) {
+    for (RegionStateNode node : regionsMap.tailMap(tableName.getNameAsString()).values()) {
       if (!node.getTable().equals(tableName)) break;
       regions.add(node);
     }
@@ -185,7 +165,7 @@ public class RegionStates {
 
   ArrayList<RegionState> getTableRegionStates(final TableName tableName) {
     final ArrayList<RegionState> regions = new ArrayList<RegionState>();
-    for (RegionStateNode node : regionsMap.tailMap(tableName.getName()).values()) {
+    for (RegionStateNode node : regionsMap.tailMap(tableName.getNameAsString()).values()) {
       if (!node.getTable().equals(tableName)) break;
       regions.add(node.toRegionState());
     }
@@ -194,7 +174,7 @@ public class RegionStates {
 
   ArrayList<RegionInfo> getTableRegionsInfo(final TableName tableName) {
     final ArrayList<RegionInfo> regions = new ArrayList<RegionInfo>();
-    for (RegionStateNode node : regionsMap.tailMap(tableName.getName()).values()) {
+    for (RegionStateNode node : regionsMap.tailMap(tableName.getNameAsString()).values()) {
       if (!node.getTable().equals(tableName)) break;
       regions.add(node.getRegionInfo());
     }
@@ -224,7 +204,7 @@ public class RegionStates {
   }
 
   public RegionState getRegionState(final String encodedRegionName) {
-    final RegionStateNode node = encodedRegionsMap.get(encodedRegionName);
+    final RegionStateNode node = regionsMap.get(encodedRegionName);
     if (node == null) {
       return null;
     }
